@@ -44,18 +44,43 @@ function parseAmount(text: string): { amount: number; unit: string } | null {
   if (!match) return null;
   const fraction: Record<string, number> = { "½": 0.5, "¼": 0.25, "¾": 0.75 };
   const amount = fraction[match[1]] ?? Number(match[1].replace(",", "."));
-  const unit = (match[2] ?? "ud").replace(/unidades?/, "ud").replace(/kilogramos?/, "kg").replace(/gramos?/, "g").replace(/litros?/, "l").replace(/mililitros?/, "ml");
+  const unit = (match[2] ?? "ud").replace(/unidades?/, "ud").replace(/latas?/, "ud").replace(/kilogramos?/, "kg").replace(/gramos?/, "g").replace(/litros?/, "l").replace(/mililitros?/, "ml");
   return Number.isFinite(amount) ? { amount, unit } : null;
 }
 function baseAmount(amount: number, unit: string) {
   if (unit === "kg") return { amount: amount * 1000, unit: "g" };
   if (unit === "l") return { amount: amount * 1000, unit: "ml" };
+  if (unit === "cucharada") return { amount: amount * 15, unit: "ml" };
+  if (unit === "cucharadita") return { amount: amount * 5, unit: "ml" };
   return { amount, unit };
 }
 function printAmount(amount: number, unit: string) {
   const rounded = Math.round(amount * 100) / 100;
   if ((unit === "g" || unit === "ml") && rounded >= 1000) return `${Math.round(rounded / 10) / 100} ${unit === "g" ? "kg" : "l"}`;
   return `${rounded} ${unit}`;
+}
+function repriceShopping(items: ShoppingItem[], products: Product[]) {
+  return items.map((item) => {
+    const name = item.name.toLocaleLowerCase("es");
+    const product = products.find((candidate) => candidate.name.toLocaleLowerCase("es") === name || (candidate.aliases ?? []).some((alias) => alias.toLocaleLowerCase("es") === name));
+    let price: number | null = null;
+    const needed = parseAmount(item.quantity);
+    if (product && needed) price = estimateProductPrice(product, needed.amount, needed.unit);
+    return { ...item, productId: product?.id ?? item.productId, price };
+  });
+}
+function estimateProductPrice(product: Product, amount: number, unit: string): number | null {
+  if (!product.verified || product.price === null) return null;
+  const needed = baseAmount(amount, unit);
+  const pack = parseAmount(product.pack);
+  const normalizedPack = pack ? baseAmount(pack.amount, pack.unit) : null;
+  if (normalizedPack && normalizedPack.unit === needed.unit && normalizedPack.amount > 0) {
+    return product.price * Math.ceil(needed.amount / normalizedPack.amount);
+  }
+  if (unit === "ud" && product.category === "Frutas y verduras" && /aprox/i.test(product.pack)) {
+    return product.price * Math.ceil(amount);
+  }
+  return null;
 }
 
 export default function Home() {
@@ -69,7 +94,7 @@ export default function Home() {
   useEffect(() => {
     try {
       const saved = localStorage.getItem("mercaplanner.local.v1");
-      if (saved) { const parsed = JSON.parse(saved) as Partial<AppData>; setData({ ...blankData, ...parsed, products: (parsed.products ?? []).map((product) => ({ ...product, observedAt: product.observedAt ?? null, source: product.source ?? "manual", sourceUrl: product.sourceUrl ?? "", aliases: product.aliases ?? [] })), household: { ...initialHousehold, ...parsed.household }, recipes: starterRecipes }); }
+      if (saved) { const parsed = JSON.parse(saved) as Partial<AppData>; const products = (parsed.products ?? []).map((product) => ({ ...product, observedAt: product.observedAt ?? null, source: product.source ?? "manual", sourceUrl: product.sourceUrl ?? "", aliases: product.aliases ?? [] })); setData({ ...blankData, ...parsed, products, shopping: repriceShopping(parsed.shopping ?? [], products), household: { ...initialHousehold, ...parsed.household }, recipes: starterRecipes }); }
     } catch { setMessage("No se pudieron cargar los datos guardados en este navegador."); }
     setReady(true);
   }, []);
@@ -141,7 +166,7 @@ export default function Home() {
     const list: ShoppingItem[] = Array.from(needed.values()).filter((item) => !pantryNames.has(item.name.toLocaleLowerCase("es"))).map((item) => {
       const product = data.products.find((candidate) => candidate.name.toLocaleLowerCase("es") === item.name.toLocaleLowerCase("es") || (candidate.aliases ?? []).some((alias) => alias.toLocaleLowerCase("es") === item.name.toLocaleLowerCase("es")));
       let quantity = item.amount ? printAmount(item.amount, item.unit) : item.fallback;
-      let linePrice: number | null = null;
+      let linePrice: number | null = item.amount && product ? estimateProductPrice(product, item.amount, item.unit) : null;
       if (item.amount && product?.verified && product.price !== null) {
         const pack = parseAmount(product.pack);
         const packAmount = pack ? baseAmount(pack.amount, pack.unit) : null;
@@ -162,11 +187,13 @@ export default function Home() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const rawPrice = String(form.get("price") ?? "").trim().replace(",", ".");
-    const product: Product = { id: uuid(), name: String(form.get("name") ?? "").trim(), brand: String(form.get("brand") ?? "").trim(), category: String(form.get("category") ?? "Otros"), pack: String(form.get("pack") ?? "").trim(), price: rawPrice ? Number(rawPrice) : null, postalCode: data.household.postalCode, updatedAt: new Date().toISOString(), observedAt: null, source: "manual", sourceUrl: String(form.get("sourceUrl") ?? "").trim(), aliases: [], verified: false };
+    const sourceUrl = String(form.get("sourceUrl") ?? "").trim();
+    const verified = Boolean(rawPrice && sourceUrl.startsWith("https://tienda.mercadona.es/"));
+    const product: Product = { id: uuid(), name: String(form.get("name") ?? "").trim(), brand: String(form.get("brand") ?? "").trim(), category: String(form.get("category") ?? "Otros"), pack: String(form.get("pack") ?? "").trim(), price: rawPrice ? Number(rawPrice) : null, postalCode: data.household.postalCode, updatedAt: new Date().toISOString(), observedAt: verified ? localDateInput() : null, source: verified ? "mercadona-online" : "manual", sourceUrl, aliases: String(form.get("aliases") ?? "").split(",").map((alias) => alias.trim()).filter(Boolean), verified };
     if (!product.name || (rawPrice && !Number.isFinite(product.price))) { setMessage("Revisa el nombre y el precio."); return; }
-    setData((current) => ({ ...current, products: [...current.products, product] }));
+    setData((current) => { const products = [...current.products, product]; return { ...current, products, shopping: repriceShopping(current.shopping, products) }; });
     event.currentTarget.reset();
-    setMessage("Producto añadido como dato manual; su precio no se considera verificado.");
+    setMessage(verified ? "Producto y precio oficial de Mercadona Online añadidos." : "Producto añadido; sin URL oficial y precio no queda verificado.");
   }
 
   async function importWorkbook(event: ChangeEvent<HTMLInputElement>) {
@@ -191,7 +218,7 @@ export default function Home() {
         const observedAt = /^\d{4}-\d{2}-\d{2}$/.test(importedDate) ? importedDate : catalogObservedDate;
         parsed.push({ id: uuid(), name, brand: String(row.marca ?? row.brand ?? ""), category: String(row.categoria ?? row.category ?? "Otros"), pack: String(row.formato ?? row.pack ?? ""), price: price !== null && Number.isFinite(price) ? price : null, postalCode: String(row.codigo_postal ?? row.postalcode ?? data.household.postalCode), updatedAt: new Date().toISOString(), observedAt, source: "mercadona-online", sourceUrl: String(row.url ?? row.url_producto ?? "https://tienda.mercadona.es/"), aliases: String(row.alias ?? row.aliases ?? "").split(/[;,]/).map((alias) => alias.trim()).filter(Boolean), verified: price !== null && Number.isFinite(price) });
       }
-      setData((current) => ({ ...current, products: [...current.products, ...parsed] }));
+      setData((current) => { const products = [...current.products, ...parsed]; return { ...current, products, shopping: repriceShopping(current.shopping, products) }; });
       setMessage(`Importación terminada: ${parsed.length} productos de Mercadona Online, consultados el ${catalogObservedDate}.`);
     } catch (error) {
       console.error(error);
@@ -274,7 +301,7 @@ export default function Home() {
         {page === "catalogo" && <section className="page-content"><div className="section-intro split-intro"><div><span className="eyebrow">DATOS DE PRODUCTO</span><h2>Catálogo</h2><p className="muted">No hay precios precargados. Importa tu Excel verificado o añade referencias manuales.</p></div><label className="button button-outline upload-button">↑ Importar Excel<input type="file" accept=".xlsx,.xls" onChange={importWorkbook} /></label></div>
           <div className="notice notice-warning"><span>!</span><p>Fuente de referencia: <a href="https://tienda.mercadona.es/" target="_blank" rel="noreferrer">tienda.mercadona.es</a>. Esta versión no consulta una API ni descarga precios automáticamente. Importa un Excel contrastado con la tienda; los productos manuales nunca se consideran verificados.</p></div>
           <div className="catalog-import-meta"><label>Fecha en que consultaste los precios<input type="date" value={catalogObservedDate} onChange={(event) => setCatalogObservedDate(event.target.value)} /></label><a href="https://ayuda.tienda.mercadona.es/hc/es/articles/360000857491-Precios-de-los-productos-SPB" target="_blank" rel="noreferrer">Cómo trata Mercadona los precios ↗</a></div>
-          <form className="product-form panel" onSubmit={addProduct}><div className="form-heading"><div><span className="eyebrow">AÑADIR REFERENCIA</span><h3>Producto manual</h3></div><span className="manual-chip">Pendiente de verificar</span></div><div className="product-fields"><label>Nombre<input name="name" required placeholder="Ej. Arroz redondo" /></label><label>Marca<input name="brand" placeholder="Opcional" /></label><label>Categoría<select name="category"><option>Frutas y verduras</option><option>Carnicería</option><option>Pescadería</option><option>Huevos y lácteos</option><option>Despensa</option><option>Conservas</option><option>Congelados</option><option>Panadería</option><option>Desayunos</option><option>Otros</option></select></label><label>Formato<input name="pack" placeholder="Ej. 1 kg" /></label><label>Precio €<input name="price" type="number" min="0" step="0.01" placeholder="Opcional" /></label><label>URL de la ficha<input name="sourceUrl" type="url" placeholder="Opcional" /></label><button className="button button-dark">Añadir producto</button></div></form>
+          <form className="product-form panel" onSubmit={addProduct}><div className="form-heading"><div><span className="eyebrow">AÑADIR REFERENCIA</span><h3>Producto manual</h3></div><span className="manual-chip">Verifica con URL oficial</span></div><div className="product-fields"><label>Nombre<input name="name" required placeholder="Ej. Arroz redondo Hacendado" /></label><label>Marca<input name="brand" placeholder="Opcional" /></label><label>Categoría<select name="category"><option>Frutas y verduras</option><option>Carnicería</option><option>Pescadería</option><option>Huevos y lácteos</option><option>Despensa</option><option>Conservas</option><option>Congelados</option><option>Panadería</option><option>Desayunos</option><option>Otros</option></select></label><label>Formato<input name="pack" placeholder="Ej. 1 kg" /></label><label>Precio €<input name="price" type="number" min="0" step="0.01" placeholder="Opcional" /></label><label>Alias para recetas<input name="aliases" placeholder="Ej. Arroz" /></label><label>URL oficial<input name="sourceUrl" type="url" placeholder="Ficha o búsqueda Mercadona" /></label><button className="button button-dark">Añadir producto</button></div></form>
           <div className="catalog-tools"><label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar productos..." /></label><span className="muted">{shownProducts.length} referencias</span></div>
           {shownProducts.length ? <div className="panel table-wrap"><table className="catalog-table"><thead><tr><th>Producto</th><th>Categoría</th><th>Formato</th><th>Precio</th><th>Fuente / fecha</th></tr></thead><tbody>{shownProducts.map((product) => <tr key={product.id}><td><strong>{product.sourceUrl ? <a href={product.sourceUrl} target="_blank" rel="noreferrer">{product.name} ↗</a> : product.name}</strong><small>{product.brand || "Sin marca"}{product.aliases?.length ? ` · Para recetas: ${product.aliases.join(", ")}` : ""}</small></td><td>{product.category}</td><td>{product.pack || "—"}</td><td>{money(product.price)}</td><td><span className={`status-tag ${product.verified ? "verified" : "pending"}`}>{product.source === "mercadona-online" ? `Mercadona Online · CP ${product.postalCode || "—"} · ${product.observedAt ?? "fecha pendiente"}` : "Manual / pendiente de verificar"}</span></td></tr>)}</tbody></table></div> : <div className="panel empty-panel"><EmptyState icon="⌕" title="Catálogo vacío" text="La aplicación no inventará precios. Añade productos manuales o importa un Excel contrastado con Mercadona Online." /></div>}
         </section>}

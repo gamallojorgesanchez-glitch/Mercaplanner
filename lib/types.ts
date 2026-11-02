@@ -7,6 +7,9 @@ export type Product = {
   price: number | null;
   postalCode: string;
   updatedAt: string;
+  observedAt: string | null;
+  source: "mercadona-online" | "manual";
+  sourceUrl: string;
   verified: boolean;
 };
 

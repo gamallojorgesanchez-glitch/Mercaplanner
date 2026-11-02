@@ -83,6 +83,9 @@ Las imágenes se cargarán mediante URL incluida en Excel o las añadirá admini
 
 ### 7.2 Importación y actualización
 
+- La tienda online oficial de Mercadona (`https://tienda.mercadona.es/`) es la fuente de referencia para los precios. La primera versión no consulta ni extrae datos automáticamente de la web: la administración importa un Excel revisado contra la tienda oficial y confirma su procedencia.
+- Cada precio importado conserva su URL de producto cuando esté disponible y su fecha de consulta. Si el Excel no aporta fecha válida ISO (`AAAA-MM-DD`), se guarda la fecha de consulta seleccionada durante la importación.
+- La ayuda oficial de Mercadona indica que los precios online coinciden con los de tienda física; para productos de peso variable, el importe final puede variar según la cantidad preparada. El sistema debe mostrar el coste estimado de estos artículos como orientativo cuando no se conozca el peso final.
 - La administración importa archivos `.xlsx`.
 - Cada carga se declara catálogo completo o actualización incremental.
 - Las filas válidas se publican automáticamente; las filas con errores se omiten y se informa del detalle del error.

@@ -20,8 +20,9 @@ Abre <http://127.0.0.1:3000>. No hacen falta claves de API ni servicios de pago.
 
 - Los datos del hogar se guardan en `localStorage` del navegador en el que se usa la aplicación.
 - GitHub sincroniza el código y la documentación; no sincroniza los datos personales del navegador.
-- El catálogo empieza vacío. El importador lee la primera hoja de un Excel (`.xlsx` o `.xls`) y acepta las columnas `Nombre`, `Marca`, `Categoría`, `Formato`, `Precio` y `Código_postal` (también reconoce nombres ingleses equivalentes).
-- Antes de importar se pide confirmar que el archivo procede de una fuente autorizada y contiene precios verificados. Los productos añadidos manualmente siempre aparecen como pendientes y sus precios no se usan para estimar el presupuesto.
+- El catálogo empieza vacío. La fuente de referencia de precios es la [tienda online oficial de Mercadona](https://tienda.mercadona.es/). El importador lee la primera hoja de un Excel (`.xlsx` o `.xls`) con datos contrastados allí; acepta las columnas `Nombre`, `Marca`, `Categoría`, `Formato`, `Precio` y `Código_postal` (también reconoce nombres ingleses equivalentes), y opcionalmente `URL` y `Fecha_actualizacion` (`AAAA-MM-DD`).
+- La app no descarga precios automáticamente ni usa una API no oficial: pide confirmar que el Excel se ha comprobado en la tienda oficial, y conserva la fuente y fecha de consulta para cada producto. Si la fecha del Excel no está en formato `AAAA-MM-DD`, aplica la fecha seleccionada en pantalla. Los productos añadidos manualmente aparecen como pendientes y sus precios no se usan para estimar el presupuesto.
+- Mercadona indica que los precios online coinciden con los de tienda física; el precio final de productos de peso variable puede cambiar según la cantidad preparada. Consulta [la explicación oficial de precios](https://ayuda.tienda.mercadona.es/hc/es/articles/360000857491-Precios-de-los-productos-SPB).
 - Las recetas incluidas son una pequeña semilla demostrativa, todavía no la biblioteca revisada de 60 recetas acordada.
 - Si se declara una alergia o intolerancia, el generador se bloquea: esta versión aún no cuenta con fichas verificadas de alérgenos.
 - La planificación, la lista y la despensa son locales y de un solo hogar. No hay cuentas, invitaciones ni sincronización entre dispositivos.

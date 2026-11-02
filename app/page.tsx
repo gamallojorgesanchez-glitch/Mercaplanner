@@ -25,6 +25,10 @@ function money(value: number | null) {
   return value === null ? "Sin precio" : new Intl.NumberFormat("es-ES", { style: "currency", currency: "EUR" }).format(value);
 }
 function uuid() { return crypto.randomUUID(); }
+function localDateInput() {
+  const date = new Date();
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 function datesInMonth(month: string) {
   const [year, m] = month.split("-").map(Number);
   return Array.from({ length: new Date(year, m, 0).getDate() }, (_, i) => {
@@ -60,11 +64,12 @@ export default function Home() {
   const [ready, setReady] = useState(false);
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
+  const [catalogObservedDate, setCatalogObservedDate] = useState(localDateInput());
 
   useEffect(() => {
     try {
       const saved = localStorage.getItem("mercaplanner.local.v1");
-      if (saved) { const parsed = JSON.parse(saved) as Partial<AppData>; setData({ ...blankData, ...parsed, household: { ...initialHousehold, ...parsed.household }, recipes: starterRecipes }); }
+      if (saved) { const parsed = JSON.parse(saved) as Partial<AppData>; setData({ ...blankData, ...parsed, products: (parsed.products ?? []).map((product) => ({ ...product, observedAt: product.observedAt ?? null, source: product.source ?? "manual", sourceUrl: product.sourceUrl ?? "" })), household: { ...initialHousehold, ...parsed.household }, recipes: starterRecipes }); }
     } catch { setMessage("No se pudieron cargar los datos guardados en este navegador."); }
     setReady(true);
   }, []);
@@ -157,7 +162,7 @@ export default function Home() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const rawPrice = String(form.get("price") ?? "").trim().replace(",", ".");
-    const product: Product = { id: uuid(), name: String(form.get("name") ?? "").trim(), brand: String(form.get("brand") ?? "").trim(), category: String(form.get("category") ?? "Otros"), pack: String(form.get("pack") ?? "").trim(), price: rawPrice ? Number(rawPrice) : null, postalCode: data.household.postalCode, updatedAt: new Date().toISOString(), verified: false };
+    const product: Product = { id: uuid(), name: String(form.get("name") ?? "").trim(), brand: String(form.get("brand") ?? "").trim(), category: String(form.get("category") ?? "Otros"), pack: String(form.get("pack") ?? "").trim(), price: rawPrice ? Number(rawPrice) : null, postalCode: data.household.postalCode, updatedAt: new Date().toISOString(), observedAt: null, source: "manual", sourceUrl: String(form.get("sourceUrl") ?? "").trim(), verified: false };
     if (!product.name || (rawPrice && !Number.isFinite(product.price))) { setMessage("Revisa el nombre y el precio."); return; }
     setData((current) => ({ ...current, products: [...current.products, product] }));
     event.currentTarget.reset();
@@ -167,7 +172,7 @@ export default function Home() {
   async function importWorkbook(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    if (!window.confirm("¿Confirmas que este Excel procede de una fuente autorizada y contiene precios verificados para la tienda o zona indicada?")) { event.target.value = ""; return; }
+    if (!window.confirm(`¿Confirmas que los precios del Excel se han consultado en https://tienda.mercadona.es/ y corresponden a la fecha ${catalogObservedDate}?`)) { event.target.value = ""; return; }
     try {
       const XLSX = await import("xlsx");
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
@@ -182,10 +187,12 @@ export default function Home() {
         if (!name) continue;
         const priceText = String(row.precio ?? row.price ?? "").trim().replace(",", ".");
         const price = priceText ? Number(priceText) : null;
-        parsed.push({ id: uuid(), name, brand: String(row.marca ?? row.brand ?? ""), category: String(row.categoria ?? row.category ?? "Otros"), pack: String(row.formato ?? row.pack ?? ""), price: price !== null && Number.isFinite(price) ? price : null, postalCode: String(row.codigo_postal ?? row.postalcode ?? data.household.postalCode), updatedAt: new Date().toISOString(), verified: price !== null && Number.isFinite(price) });
+        const importedDate = String(row.fecha_actualizacion ?? row.observedat ?? row.updatedat ?? "").trim();
+        const observedAt = /^\d{4}-\d{2}-\d{2}$/.test(importedDate) ? importedDate : catalogObservedDate;
+        parsed.push({ id: uuid(), name, brand: String(row.marca ?? row.brand ?? ""), category: String(row.categoria ?? row.category ?? "Otros"), pack: String(row.formato ?? row.pack ?? ""), price: price !== null && Number.isFinite(price) ? price : null, postalCode: String(row.codigo_postal ?? row.postalcode ?? data.household.postalCode), updatedAt: new Date().toISOString(), observedAt, source: "mercadona-online", sourceUrl: String(row.url ?? row.url_producto ?? "https://tienda.mercadona.es/"), verified: price !== null && Number.isFinite(price) });
       }
       setData((current) => ({ ...current, products: [...current.products, ...parsed] }));
-      setMessage(`Importación terminada: ${parsed.length} productos válidos. Verifica que el archivo sea una fuente autorizada y reciente.`);
+      setMessage(`Importación terminada: ${parsed.length} productos de Mercadona Online, consultados el ${catalogObservedDate}.`);
     } catch (error) {
       console.error(error);
       setMessage("No se pudo leer el Excel. Comprueba que incluya columnas Nombre, Precio, Categoría y Formato.");
@@ -265,10 +272,11 @@ export default function Home() {
         {page === "despensa" && <section className="page-content"><div className="section-intro"><span className="eyebrow">INVENTARIO DE CASA</span><h2>Mi despensa</h2><p className="muted">Marca qué productos tienes. Antes de cada compra confirmarás si hay suficiente.</p></div>{data.products.length ? <div className="pantry-grid">{data.products.map((product) => { const item = data.pantry.find((entry) => entry.productId === product.id); return <button className={`pantry-card ${item?.enough ? "pantry-active" : ""}`} key={product.id} onClick={() => setData((current) => ({ ...current, pantry: current.pantry.some((entry) => entry.productId === product.id) ? current.pantry.map((entry) => entry.productId === product.id ? { ...entry, enough: !entry.enough } : entry) : [...current.pantry, { productId: product.id, enough: true }] }))}><span className="check-button">{item?.enough ? "✓" : ""}</span><strong>{product.name}</strong><small>{item?.enough ? "Hay suficiente" : "Marcar como disponible"}</small></button>; })}</div> : <div className="panel empty-panel"><EmptyState icon="▤" title="Empieza con el catálogo" text="Importa productos y luego marca los que ya tienes en casa." action="Abrir catálogo" onAction={() => setPage("catalogo")} /></div>}</section>}
 
         {page === "catalogo" && <section className="page-content"><div className="section-intro split-intro"><div><span className="eyebrow">DATOS DE PRODUCTO</span><h2>Catálogo</h2><p className="muted">No hay precios precargados. Importa tu Excel verificado o añade referencias manuales.</p></div><label className="button button-outline upload-button">↑ Importar Excel<input type="file" accept=".xlsx,.xls" onChange={importWorkbook} /></label></div>
-          <div className="notice notice-warning"><span>!</span><p>Solo marca como verificados los datos procedentes de una fuente autorizada y actualizada. Los productos añadidos manualmente nunca se consideran verificados automáticamente.</p></div>
-          <form className="product-form panel" onSubmit={addProduct}><div className="form-heading"><div><span className="eyebrow">AÑADIR REFERENCIA</span><h3>Producto manual</h3></div><span className="manual-chip">Pendiente de verificar</span></div><div className="product-fields"><label>Nombre<input name="name" required placeholder="Ej. Arroz redondo" /></label><label>Marca<input name="brand" placeholder="Opcional" /></label><label>Categoría<select name="category"><option>Frutas y verduras</option><option>Carnicería</option><option>Pescadería</option><option>Huevos y lácteos</option><option>Despensa</option><option>Conservas</option><option>Congelados</option><option>Panadería</option><option>Desayunos</option><option>Otros</option></select></label><label>Formato<input name="pack" placeholder="Ej. 1 kg" /></label><label>Precio €<input name="price" type="number" min="0" step="0.01" placeholder="Opcional" /></label><button className="button button-dark">Añadir producto</button></div></form>
+          <div className="notice notice-warning"><span>!</span><p>Fuente de referencia: <a href="https://tienda.mercadona.es/" target="_blank" rel="noreferrer">tienda.mercadona.es</a>. Esta versión no consulta una API ni descarga precios automáticamente. Importa un Excel contrastado con la tienda; los productos manuales nunca se consideran verificados.</p></div>
+          <div className="catalog-import-meta"><label>Fecha en que consultaste los precios<input type="date" value={catalogObservedDate} onChange={(event) => setCatalogObservedDate(event.target.value)} /></label><a href="https://ayuda.tienda.mercadona.es/hc/es/articles/360000857491-Precios-de-los-productos-SPB" target="_blank" rel="noreferrer">Cómo trata Mercadona los precios ↗</a></div>
+          <form className="product-form panel" onSubmit={addProduct}><div className="form-heading"><div><span className="eyebrow">AÑADIR REFERENCIA</span><h3>Producto manual</h3></div><span className="manual-chip">Pendiente de verificar</span></div><div className="product-fields"><label>Nombre<input name="name" required placeholder="Ej. Arroz redondo" /></label><label>Marca<input name="brand" placeholder="Opcional" /></label><label>Categoría<select name="category"><option>Frutas y verduras</option><option>Carnicería</option><option>Pescadería</option><option>Huevos y lácteos</option><option>Despensa</option><option>Conservas</option><option>Congelados</option><option>Panadería</option><option>Desayunos</option><option>Otros</option></select></label><label>Formato<input name="pack" placeholder="Ej. 1 kg" /></label><label>Precio €<input name="price" type="number" min="0" step="0.01" placeholder="Opcional" /></label><label>URL de la ficha<input name="sourceUrl" type="url" placeholder="Opcional" /></label><button className="button button-dark">Añadir producto</button></div></form>
           <div className="catalog-tools"><label className="search-box"><span>⌕</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Buscar productos..." /></label><span className="muted">{shownProducts.length} referencias</span></div>
-          {shownProducts.length ? <div className="panel table-wrap"><table className="catalog-table"><thead><tr><th>Producto</th><th>Categoría</th><th>Formato</th><th>Precio</th><th>Estado</th></tr></thead><tbody>{shownProducts.map((product) => <tr key={product.id}><td><strong>{product.name}</strong><small>{product.brand || "Sin marca"}</small></td><td>{product.category}</td><td>{product.pack || "—"}</td><td>{money(product.verified ? product.price : null)}</td><td><span className={`status-tag ${product.verified ? "verified" : "pending"}`}>{product.verified ? "Verificado" : "Manual / pendiente"}</span></td></tr>)}</tbody></table></div> : <div className="panel empty-panel"><EmptyState icon="⌕" title="Catálogo vacío" text="La aplicación no inventará precios. Añade productos manuales o importa un Excel del catálogo." /></div>}
+          {shownProducts.length ? <div className="panel table-wrap"><table className="catalog-table"><thead><tr><th>Producto</th><th>Categoría</th><th>Formato</th><th>Precio</th><th>Fuente / fecha</th></tr></thead><tbody>{shownProducts.map((product) => <tr key={product.id}><td><strong>{product.sourceUrl ? <a href={product.sourceUrl} target="_blank" rel="noreferrer">{product.name} ↗</a> : product.name}</strong><small>{product.brand || "Sin marca"}</small></td><td>{product.category}</td><td>{product.pack || "—"}</td><td>{money(product.verified ? product.price : null)}</td><td><span className={`status-tag ${product.verified ? "verified" : "pending"}`}>{product.source === "mercadona-online" ? `Mercadona Online · ${product.observedAt ?? "fecha pendiente"}` : "Manual / pendiente"}</span></td></tr>)}</tbody></table></div> : <div className="panel empty-panel"><EmptyState icon="⌕" title="Catálogo vacío" text="La aplicación no inventará precios. Añade productos manuales o importa un Excel contrastado con Mercadona Online." /></div>}
         </section>}
         <footer className="page-footer">Mercaplanner · Versión local de desarrollo <span>Los datos se guardan en este navegador.</span></footer>
       </main>

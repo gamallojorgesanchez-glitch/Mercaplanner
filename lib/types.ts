@@ -10,6 +10,7 @@ export type Product = {
   observedAt: string | null;
   source: "mercadona-online" | "manual";
   sourceUrl: string;
+  aliases: string[];
   verified: boolean;
 };
 
